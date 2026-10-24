@@ -1,5 +1,6 @@
 import os
 import secrets
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, Header, Query
@@ -17,21 +18,66 @@ from .schemas import (
 from .security import hash_password, verify_password, make_token, token_user_id
 from .audit import write_audit, serialize_dt
 
-Base.metadata.create_all(bind=engine)
-upload_dir_path = Path(settings.upload_dir).resolve()
-upload_dir_path.mkdir(parents=True, exist_ok=True)
+cors_list = [x.strip() for x in settings.cors_origins.split(",") if x.strip()]
+has_wildcard = "*" in cors_list
 
-app = FastAPI(title="TrustVault API", version="0.2.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Ensure upload directory exists; fail clearly at startup if it cannot be created
+    upload_path = Path(settings.upload_dir).resolve()
+    try:
+        upload_path.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise RuntimeError(
+            f"Startup failed: Unable to create or access upload directory at '{upload_path}'. Error: {exc}"
+        ) from exc
+
+    # Production security verifications
+    if settings.environment.lower() == "production":
+        insecure_keys = {
+            "development-only-change-me",
+            "replace-this-with-a-long-random-secret-before-running",
+            "replace-with-a-secure-random-secret",
+            "secret",
+            "changeme",
+        }
+        stripped_key = settings.secret_key.strip()
+        if not stripped_key or stripped_key in insecure_keys or len(stripped_key) < 32:
+            raise RuntimeError(
+                "CRITICAL SECURITY CONFIGURATION: In production mode (ENVIRONMENT=production), "
+                "SECRET_KEY must be set to a secure random string of at least 32 characters. "
+                "Default development keys are strictly rejected."
+            )
+        if "*" in cors_list or not cors_list:
+            raise RuntimeError(
+                "CRITICAL SECURITY CONFIGURATION: In production mode (ENVIRONMENT=production), "
+                "CORS_ORIGINS cannot contain wildcard '*'. Provide exact frontend origins."
+            )
+
+    # Ensure tables exist without dropping existing data; prevent credential leakage in error messages
+    try:
+        Base.metadata.create_all(bind=engine)
+    except Exception:
+        safe_target = settings.safe_database_url
+        raise RuntimeError(
+            f"Startup failed: Unable to connect to or initialize database at '{safe_target}'."
+        ) from None
+    yield
+
+app = FastAPI(title="TrustVault API", version="0.2.0", lifespan=lifespan)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[x.strip() for x in settings.cors_origins.split(",") if x.strip()],
-    allow_credentials=False,
+    allow_origins=cors_list if cors_list else ["http://localhost:5173"],
+    allow_credentials=False if has_wildcard else True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 def safe_path(filename: str) -> Path:
     base = Path(settings.upload_dir).resolve()
+    if not base.is_dir():
+        base.mkdir(parents=True, exist_ok=True)
     target = (base / filename).resolve()
     if not target.is_relative_to(base):
         raise HTTPException(400, "Invalid file path")

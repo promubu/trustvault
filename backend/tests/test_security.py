@@ -432,3 +432,42 @@ def test_sequential_audit_events_maintain_valid_chain():
     assert data["valid"] is True
     assert data["events_checked"] >= 15
 
+def test_safe_database_url_masks_credentials(monkeypatch):
+    monkeypatch.setattr(settings, "database_url", "postgresql://admin_user:SuperSecretPassword999@db.render.internal:5432/trustvault_prod")
+    safe = settings.safe_database_url
+    assert "SuperSecretPassword999" not in safe
+    assert "admin_user:***@db.render.internal:5432/trustvault_prod" in safe
+
+@pytest.mark.anyio
+async def test_production_startup_rejects_insecure_secret_key(monkeypatch):
+    from app.main import lifespan
+    monkeypatch.setattr(settings, "environment", "production")
+    monkeypatch.setattr(settings, "secret_key", "development-only-change-me")
+    with pytest.raises(RuntimeError, match="CRITICAL SECURITY CONFIGURATION.*SECRET_KEY"):
+        async with lifespan(app):
+            pass
+
+@pytest.mark.anyio
+async def test_production_startup_rejects_wildcard_cors(monkeypatch):
+    from app.main import lifespan
+    import app.main as main_mod
+    monkeypatch.setattr(settings, "environment", "production")
+    monkeypatch.setattr(settings, "secret_key", "a-very-long-and-secure-random-secret-key-32chars")
+    monkeypatch.setattr(main_mod, "cors_list", ["*"])
+    with pytest.raises(RuntimeError, match="CRITICAL SECURITY CONFIGURATION.*CORS_ORIGINS"):
+        async with lifespan(app):
+            pass
+
+@pytest.mark.anyio
+async def test_startup_fails_fast_on_uncreatable_upload_directory(monkeypatch, tmp_path):
+    from app.main import lifespan
+    # Point upload_dir to a path inside a file, causing an OSError / FileExistsError / NotADirectoryError
+    blocking_file = tmp_path / "blocking_file.txt"
+    blocking_file.write_text("i am a file")
+    invalid_upload_path = blocking_file / "sub_upload_dir"
+    monkeypatch.setattr(settings, "upload_dir", str(invalid_upload_path))
+
+    with pytest.raises(RuntimeError, match="Startup failed: Unable to create or access upload directory"):
+        async with lifespan(app):
+            pass
+

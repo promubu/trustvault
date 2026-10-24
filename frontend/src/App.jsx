@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-const API = 'http://127.0.0.1:8000'
+const API = (import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000').replace(/\/+$/, '')
 
 function formatBytes(bytes) {
   if (!bytes || bytes === 0) return '0 B'

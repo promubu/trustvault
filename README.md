@@ -197,12 +197,150 @@ npm run build
 
 ---
 
-## 8. Deployment Status & Production Considerations
+## 8. Cloud Deployment Guide (Render + Vercel)
 
-- **Current Status**: Local development and automated testing build. Cloud deployment (e.g. AWS ECS / Azure Container Apps / GCP Cloud Run) is not yet configured.
-- **Production Hardening Checklist Before Public Release**:
-  1. **Secrets**: Inject `SECRET_KEY` and database credentials from a hardware security module (AWS KMS / HashiCorp Vault) rather than a local `.env` file.
-  2. **HTTPS & Cookies**: Transmit tokens in `SameSite=Strict`, `Secure`, `HttpOnly` cookies over TLS.
-  3. **Alembic Migrations**: Replace `create_all()` with versioned Alembic schema migrations.
-  4. **Isolated Storage**: Store sensitive files in private S3 buckets with server-side encryption (SSE-KMS) and virus scanning pipelines.
-  5. **External Audit Sink**: Mirror audit logs to an external append-only WORM log repository (e.g. AWS CloudWatch / S3 Object Lock) to prevent tampering even by privileged database administrators.
+### Architecture in the Cloud
+- **Frontend**: Deployed on **Vercel** as a static single-page application (SPA).
+- **Backend API**: Deployed on **Render** as a Python Web Service.
+- **Database**: Managed **PostgreSQL** on Render (or Supabase/Neon/AWS RDS).
+- **Upload Storage**: Persistent Disk attached on Render (or local private disk).
+
+---
+
+### Why the Backend Fails on Vercel Serverless
+If you attempt to deploy the FastAPI backend directly to Vercel Serverless Functions, it fails with `500 FUNCTION_INVOCATION_FAILED` (`could not import "app/main.py"`) because:
+1. **Read-Only File System**: Vercel serverless runs inside read-only AWS Lambda containers. TrustVault's upload directory creation (`mkdir`) and default SQLite initialization attempt to write to `/var/task/`, which throws an immediate `OSError: [Errno 30] Read-only file system`.
+2. **Missing Module Path Context**: Serverless entry points do not set `PYTHONPATH=backend`, causing relative imports (`from .config import settings`) to fail during module load.
+3. **Stateless Nature**: Serverless functions discard local disk files as soon as the HTTP execution completes, making uploaded document retention impossible without external object storage.
+
+**Solution**: Deploy the frontend on Vercel and the backend on Render as a persistent web service.
+
+---
+
+### Part A: Deploy PostgreSQL on Render (or External Managed Database)
+
+> [!IMPORTANT]
+> **Render Free PostgreSQL 30-Day Policy**:
+> Render's free PostgreSQL database (`plan: free`) automatically expires **30 days** after creation. Render gives a 14-day grace period to upgrade to a paid plan ($7/mo); otherwise, the database and all stored data are permanently deleted.
+> - **For short-term evaluation / demos**: Render's free PostgreSQL tier is suitable.
+> - **For permanent / non-expiring hosting**: Either upgrade the Render database to `plan: starter` ($7/mo), or use a free managed PostgreSQL provider that does not expire (such as [Neon](https://neon.tech) or [Supabase](https://supabase.com)), and paste their connection string into `DATABASE_URL`.
+
+1. Sign up / Log in to [Render](https://render.com).
+2. Click **New +** → **PostgreSQL**.
+3. Configure the database:
+   - **Name**: `trustvault-db`
+   - **Database**: `trustvault`
+   - **User**: `trustvault`
+   - **Region**: Select your closest region (e.g. Frankfurt, Oregon, Singapore).
+   - **Plan**: Free (30-day limit) or Starter ($7/mo for permanent data).
+4. Click **Create Database**.
+5. Once created, copy the **Internal Database URL** (if deploying backend on Render) or **External Database URL**.
+   *(Note: TrustVault automatically converts `postgres://` and `postgresql://` into `postgresql+psycopg://` so any standard connection string works out-of-the-box).*
+
+---
+
+### Part B: Deploy FastAPI Backend on Render
+
+You can deploy using either the automatic **Blueprint** (`render.yaml`) or the **Manual Dashboard**.
+
+#### Method 1: Automatic Blueprint (Recommended)
+1. Go to your Render Dashboard → **Blueprints** → **New Blueprint Instance**.
+2. Connect your GitHub repository: `https://github.com/promubu/trustvault`.
+3. Render reads `render.yaml` and provisions both `trustvault-db` and `trustvault-backend`.
+4. Click **Apply**.
+
+> [!NOTE]
+> **Persistent Disk & Plan Requirements**:
+> The Blueprint in `render.yaml` specifies `plan: starter` and a 1 GB persistent disk mounted at `/var/data` (`UPLOAD_DIR=/var/data/uploads`). Render requires a paid plan (`starter`, $7/mo) to attach persistent disks.
+>
+> **Zero-Cost / Free-Tier Alternative**: If you prefer to deploy completely free without a paid plan:
+> 1. In `render.yaml`, change `plan: starter` to `plan: free`.
+> 2. Remove the `disk:` block.
+> 3. Change `UPLOAD_DIR` to `./uploads`.
+> *Tradeoff*: On Render's free tier, the filesystem is ephemeral. Uploaded files will be lost when the service spins down after 15 minutes of inactivity or restarts.
+
+#### Method 2: Manual Web Service
+1. In Render Dashboard, click **New +** → **Web Service**.
+2. Connect your repository: `https://github.com/promubu/trustvault`.
+3. Fill in the service settings:
+   - **Name**: `trustvault-backend`
+   - **Region**: Same region as your database.
+   - **Branch**: `main`
+   - **Root Directory**: `backend`
+   - **Runtime**: `Python 3`
+   - **Plan**: `Starter` (if attaching disk) or `Free` (ephemeral storage).
+   - **Build Command**: `pip install -r requirements.txt`
+   - **Start Command**: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+4. Add **Environment Variables**:
+   | Variable | Value | Description |
+   |---|---|---|
+   | `DATABASE_URL` | *Paste connection string from Part A* | PostgreSQL connection string |
+   | `SECRET_KEY` | *Generate a 32+ character random string* | JWT token signing key (rejected if default/weak) |
+   | `CORS_ORIGINS` | `http://localhost:5173,https://<your-project>.vercel.app` | Exact allowed frontend origins (never `*` in prod) |
+   | `UPLOAD_DIR` | `/var/data/uploads` (with disk) or `./uploads` | Stored document directory |
+   | `PYTHON_VERSION` | `3.12.10` | Python runtime version |
+   | `ENVIRONMENT` | `production` | Enforces production security checks |
+5. *(Optional for persistence)*: In **Disks**, click **Add Disk**:
+   - **Name**: `trustvault-uploads`
+   - **Mount Path**: `/var/data`
+   - **Size**: `1 GB`
+6. Click **Deploy Web Service**.
+7. Once deployed, test your API health: `https://<your-render-subdomain>.onrender.com/health` → `{"status": "ok"}`.
+
+---
+
+### Part C: Seed Demo Accounts in Cloud PostgreSQL
+With the Render backend running and connected to PostgreSQL, run the seed script once from your local machine:
+```powershell
+Set-Location -Path "c:\Users\USER\Downloads\trustvault-starter\backend"
+$env:DATABASE_URL="<paste-external-database-url-from-render>"
+.\.venv\Scripts\python.exe -m app.seed
+```
+*Demo credentials populated safely without exposing them in public code:*
+- `admin@example.com` / `AdminDemo-ChangeMe-2026!`
+- `owner@example.com` / `OwnerDemo-ChangeMe-2026!`
+- `viewer@example.com` / `ViewerDemo-ChangeMe-2026!`
+
+---
+
+### Part D: Deploy React Frontend on Vercel & Update CORS
+
+1. Log in to [Vercel](https://vercel.com).
+2. Click **Add New...** → **Project**.
+3. Import your GitHub repository: `promubu/trustvault`.
+4. In project configuration:
+   - **Framework Preset**: `Vite`
+   - **Root Directory**: Click Edit → select `frontend`.
+5. Under **Environment Variables**, add:
+   - **Key**: `VITE_API_URL`
+   - **Value**: `https://<your-render-subdomain>.onrender.com` (your deployed Render API URL, without trailing slash).
+6. Click **Deploy**.
+7. Once deployed, note your production Vercel URL (e.g., `https://trustvault-abc123.vercel.app`).
+8. **Update CORS in Render**:
+   - In Render Dashboard, go to your `trustvault-backend` service.
+   - Click **Environment**.
+   - Edit `CORS_ORIGINS` and add your exact Vercel URL:
+     `http://localhost:5173,https://trustvault-abc123.vercel.app`
+   - Save changes. Render will automatically redeploy the backend with the new origin.
+   *(Note: In production mode, TrustVault strictly rejects wildcard `*` to protect authenticated API sessions).*
+
+---
+
+## 9. Security Status & Known Limitations
+
+> [!CAUTION]
+> **Production Notice**: TrustVault is a hardened educational starter demonstrating object-level authorization, immediate revocation, and cryptographic hash chain auditing. It is **not certified for production custody of unencrypted sensitive documents**.
+
+### Known Gaps & Production Hardening Requirements
+1. **Privileged Database Tampering**:
+   - The SHA-256 hash chain detects any modification, row deletion, or reordering made through the application or an attacker without root DB access.
+   - However, a database administrator with direct SQL write access could recalculate the entire chain.
+   - *Production Solution*: Stream audit logs asynchronously to an external immutable append-only sink (e.g. AWS S3 Object Lock, CloudWatch, or a dedicated syslog server).
+2. **Audit Concurrency**:
+   - High concurrent write volume could cause race conditions in the parent hash pointers.
+   - *Production Solution*: Serialize audit event generation with a message queue or database table write-lock.
+3. **Malware Scanning**:
+   - Content validation inspects magic bytes for PDF, PNG, JPEG, and DOCX headers, preventing script extension spoofing. However, it does not scan files for polymorphic malware or embedded exploits.
+   - *Production Solution*: Run an asynchronous antivirus scanning pipeline (e.g. ClamAV sidecar or AWS GuardDuty).
+4. **Local Ephemeral Disk on Free Hosting**:
+   - Free cloud tiers (like Render free web service) discard local disk storage on container sleep or restart. Attach a persistent disk or route file uploads to an S3-compatible private object store.

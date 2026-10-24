@@ -71,6 +71,13 @@ async def lifespan(app: FastAPI):
     # Ensure tables exist without dropping existing data; prevent credential leakage in error messages
     try:
         Base.metadata.create_all(bind=engine)
+        if engine.dialect.name == "sqlite":
+            with engine.begin() as conn:
+                cols = [row[1] for row in conn.exec_driver_sql("PRAGMA table_info(documents)").fetchall()]
+                if cols and "file_size" not in cols:
+                    conn.exec_driver_sql("ALTER TABLE documents ADD COLUMN file_size INTEGER DEFAULT 0")
+                if cols and "mime_type" not in cols:
+                    conn.exec_driver_sql("ALTER TABLE documents ADD COLUMN mime_type VARCHAR(100) DEFAULT 'application/octet-stream'")
         if getattr(settings, "auto_seed_demo", True):
             from .seed import seed_demo_accounts
             with SessionLocal() as db:

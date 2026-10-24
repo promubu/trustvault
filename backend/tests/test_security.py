@@ -471,3 +471,62 @@ async def test_startup_fails_fast_on_uncreatable_upload_directory(monkeypatch, t
         async with lifespan(app):
             pass
 
+@pytest.mark.anyio
+async def test_serverless_readonly_filesystem_fallback_to_tmp(monkeypatch, tmp_path):
+    import errno
+    from app.main import lifespan
+
+    # Point upload_dir to /var/task/uploads simulation
+    simulated_ro_path = tmp_path / "var_task" / "uploads"
+    monkeypatch.setattr(settings, "upload_dir", str(simulated_ro_path))
+
+    original_mkdir = Path.mkdir
+
+    def mock_mkdir(self, *args, **kwargs):
+        # Fail on simulated_ro_path with EROFS (Read-only file system)
+        if str(self) == str(simulated_ro_path):
+            raise OSError(errno.EROFS, "Read-only file system")
+        return original_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", mock_mkdir)
+
+    # Startup should NOT crash, but fall back to tempdir/uploads
+    async with lifespan(app):
+        pass
+
+    assert "uploads" in settings.upload_dir
+    assert settings.upload_dir != str(simulated_ro_path)
+
+def test_batch_document_permissions_with_multiple_grants():
+    owner = token("owner@example.com", "OwnerTest-Password-123!")
+    viewer = token("viewer@example.com", "ViewerTest-Password-123!")
+
+    # Create 3 documents as owner
+    doc_ids = []
+    for i in range(3):
+        r = client.post(
+            "/documents",
+            data={"title": f"Batch Perm Doc {i}", "category": "Testing"},
+            files={"file": (f"batch_perm_{i}.txt", f"Content {i}".encode(), "text/plain")},
+            headers=auth(owner)
+        )
+        assert r.status_code == 200
+        doc_ids.append(r.json()["id"])
+
+    # Grant doc 0 as read to viewer, doc 1 as edit to viewer, leave doc 2 ungranted
+    with SessionLocal() as db:
+        viewer_user = db.query(User).filter_by(email="viewer@example.com").one()
+        viewer_id = viewer_user.id
+
+    client.post(f"/documents/{doc_ids[0]}/grants", json={"user_id": viewer_id, "permission": "read"}, headers=auth(owner))
+    client.post(f"/documents/{doc_ids[1]}/grants", json={"user_id": viewer_id, "permission": "edit"}, headers=auth(owner))
+
+    # Verify viewer list_documents
+    r_viewer = client.get("/documents", headers=auth(viewer))
+    assert r_viewer.status_code == 200
+    docs = {d["id"]: d["permission"] for d in r_viewer.json()}
+    assert docs.get(doc_ids[0]) == "read"
+    assert docs.get(doc_ids[1]) == "edit"
+    assert doc_ids[2] not in docs  # Ungranted doc not visible to viewer
+
+

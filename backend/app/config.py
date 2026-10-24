@@ -1,9 +1,24 @@
+import os
+import tempfile
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+def _default_upload_dir() -> str:
+    # If running in Vercel or AWS Lambda serverless, default to writable /tmp
+    if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+        return os.path.join(tempfile.gettempdir(), "uploads")
+    return "./uploads"
+
+def _default_database_url() -> str:
+    # If running in Vercel or AWS Lambda serverless without DATABASE_URL, fallback to /tmp SQLite
+    if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+        tmp_db = os.path.join(tempfile.gettempdir(), "trustvault_dev.db").replace("\\", "/")
+        return f"sqlite:///{tmp_db}"
+    return "sqlite:///./trustvault_dev.db"
+
 class Settings(BaseSettings):
-    database_url: str = "sqlite:///./trustvault_dev.db"
+    database_url: str = _default_database_url()
     secret_key: str = "development-only-change-me"
-    upload_dir: str = "./uploads"
+    upload_dir: str = _default_upload_dir()
     cors_origins: str = "http://localhost:5173"
     environment: str = "development"
     model_config = SettingsConfigDict(env_file=(".env", "backend/.env"), extra="ignore")

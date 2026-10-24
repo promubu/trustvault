@@ -128,7 +128,17 @@ export default function App() {
     notify(`Demo account selected: ${demoEmail}`)
   }
 
-  async function refreshDocs() {
+  async function refreshAudit() {
+    if (!token || user?.role !== 'admin') return
+    try {
+      const auditLog = await request('/audit')
+      setAudit(auditLog)
+    } catch {
+      // Ignore background audit refresh errors
+    }
+  }
+
+  async function refreshDocs(syncAudit = false) {
     if (!token) return
     setLoadingDocs(true)
     try {
@@ -140,9 +150,8 @@ export default function App() {
       const documents = await request(url)
       setDocs(documents)
 
-      if (user?.role === 'admin') {
-        const auditLog = await request('/audit')
-        setAudit(auditLog)
+      if (syncAudit && user?.role === 'admin') {
+        refreshAudit()
       }
     } catch (err) {
       notifyError(err.message)
@@ -153,19 +162,24 @@ export default function App() {
 
   useEffect(() => {
     if (token && user) {
-      refreshDocs()
+      refreshDocs(true)
     }
   }, [token, user])
 
   async function handleSearch(e) {
     e.preventDefault()
-    refreshDocs()
+    refreshDocs(false)
   }
 
   function clearSearch() {
     setSearchQuery('')
     setCategoryFilter('')
-    setTimeout(() => refreshDocs(), 0)
+    if (!token) return
+    setLoadingDocs(true)
+    request('/documents')
+      .then(documents => setDocs(documents))
+      .catch(err => notifyError(err.message))
+      .finally(() => setLoadingDocs(false))
   }
 
   async function handleUpload(e) {
@@ -188,7 +202,7 @@ export default function App() {
       setFile(null)
       const fileInput = document.getElementById('file-upload-input')
       if (fileInput) fileInput.value = ''
-      await refreshDocs()
+      await refreshDocs(true)
     } catch (err) {
       notifyError(err.message)
     } finally {
@@ -215,6 +229,7 @@ export default function App() {
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
       notify(`Authorized download verified: ${doc.title}`)
+      if (user?.role === 'admin') refreshAudit()
     } catch (err) {
       notifyError(err.message)
     }
@@ -225,7 +240,7 @@ export default function App() {
     try {
       await request(`/documents/${doc.id}`, { method: 'DELETE' })
       notify(`Document "${doc.title}" deleted`)
-      await refreshDocs()
+      await refreshDocs(true)
     } catch (err) {
       notifyError(err.message)
     }
@@ -252,7 +267,7 @@ export default function App() {
       })
       notify(`Updated "${editTitle}"`)
       setEditingDoc(null)
-      await refreshDocs()
+      await refreshDocs(true)
     } catch (err) {
       notifyError(err.message)
     }
@@ -292,6 +307,7 @@ export default function App() {
       notify('Permission granted successfully')
       const updatedGrants = await request(`/documents/${managingDoc.id}/grants`)
       setDocGrants(updatedGrants)
+      if (user?.role === 'admin') refreshAudit()
     } catch (err) {
       notifyError(err.message)
     }
@@ -306,6 +322,7 @@ export default function App() {
       notify('Permission revoked immediately. Access terminates on next request.')
       const updatedGrants = await request(`/documents/${managingDoc.id}/grants`)
       setDocGrants(updatedGrants)
+      if (user?.role === 'admin') refreshAudit()
     } catch (err) {
       notifyError(err.message)
     }

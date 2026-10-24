@@ -28,9 +28,23 @@ async def lifespan(app: FastAPI):
     try:
         upload_path.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
-        raise RuntimeError(
-            f"Startup failed: Unable to create or access upload directory at '{upload_path}'. Error: {exc}"
-        ) from exc
+        import errno
+        import tempfile
+        # Gracefully handle serverless read-only filesystems (e.g. /var/task on Vercel/Lambda)
+        if exc.errno == errno.EROFS or "Read-only file system" in str(exc):
+            fallback = Path(tempfile.gettempdir()) / "uploads"
+            try:
+                fallback.mkdir(parents=True, exist_ok=True)
+                settings.upload_dir = str(fallback)
+                upload_path = fallback
+            except OSError as sub_exc:
+                raise RuntimeError(
+                    f"Startup failed: Serverless filesystem is read-only and unable to create fallback at '{fallback}': {sub_exc}"
+                ) from sub_exc
+        else:
+            raise RuntimeError(
+                f"Startup failed: Unable to create or access upload directory at '{upload_path}'. Error: {exc}"
+            ) from exc
 
     # Production security verifications
     if settings.environment.lower() == "production":
@@ -77,7 +91,17 @@ app.add_middleware(
 def safe_path(filename: str) -> Path:
     base = Path(settings.upload_dir).resolve()
     if not base.is_dir():
-        base.mkdir(parents=True, exist_ok=True)
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            import errno
+            import tempfile
+            if exc.errno == errno.EROFS or "Read-only file system" in str(exc):
+                base = Path(tempfile.gettempdir()) / "uploads"
+                base.mkdir(parents=True, exist_ok=True)
+                settings.upload_dir = str(base)
+            else:
+                raise
     target = (base / filename).resolve()
     if not target.is_relative_to(base):
         raise HTTPException(400, "Invalid file path")
@@ -239,6 +263,27 @@ def list_documents(
         query = query.where(Document.created_at <= end_date)
 
     docs = db.scalars(query.order_by(Document.id.desc())).all()
+
+    # Pre-fetch user grants in a single batch query to eliminate N+1 database queries
+    if user.role == "admin":
+        user_grants = {}
+    else:
+        doc_ids = [d.id for d in docs]
+        if doc_ids:
+            grants = db.scalars(
+                select(Grant).where(Grant.user_id == user.id, Grant.document_id.in_(doc_ids))
+            ).all()
+            user_grants = {g.document_id: g.permission for g in grants}
+        else:
+            user_grants = {}
+
+    def resolve_permission(d: Document) -> str:
+        if d.owner_id == user.id:
+            return "owner"
+        if user.role == "admin":
+            return "admin"
+        return user_grants.get(d.id, "none")
+
     return [
         DocumentOut(
             id=d.id,
@@ -248,7 +293,7 @@ def list_documents(
             file_size=d.file_size,
             mime_type=d.mime_type,
             created_at=d.created_at,
-            permission=get_user_permission(db, user, d)
+            permission=resolve_permission(d)
         )
         for d in docs
     ]

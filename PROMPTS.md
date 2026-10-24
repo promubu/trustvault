@@ -2,7 +2,7 @@
 
 The challenge requires at least five dated entries describing actual AI-assisted work, including what was wrong, what was changed, and the fixing commit. These entries record the real code review, testing findings, and security mitigations implemented for TrustVault.
 
-*Note on Git commits: Git is not installed on the system PATH in this local Windows development environment; changes are tracked as local milestones within the workspace repository.*
+*Repository: [https://github.com/promubu/trustvault](https://github.com/promubu/trustvault)*
 
 ---
 
@@ -16,7 +16,7 @@ The challenge requires at least five dated entries describing actual AI-assisted
 - **What I changed and how I verified it:**
   Implemented `POST /auth/register` in `app/main.py`. Explicitly overrode the assigned role to `"viewer"`, ignoring any client-provided role parameter. Added `test_user_registration_prevents_privilege_escalation` to `tests/test_security.py` and verified that attempting to self-register as `"admin"` creates a user with `"viewer"` role who receives a 403 when requesting `/audit`.
 - **Fix commit URL:**
-  Local milestone: `backend/app/main.py`, `backend/app/schemas.py`, `tests/test_security.py`
+  Commit: [`0645cc6`](https://github.com/promubu/trustvault/commit/0645cc6c66f29eb39641ea7505b878e19f1c54b0) (`backend/app/main.py`, `backend/app/schemas.py`, `tests/test_security.py`)
 
 ---
 
@@ -35,7 +35,7 @@ The challenge requires at least five dated entries describing actual AI-assisted
   3. Added `GET /documents/{id}`, `DELETE /documents/{id}`, and `GET /documents/{id}/grants`.
   4. Verified via `test_owner_upload_and_content_validation`, `test_search_filtering_does_not_leak_unauthorized_documents`, and `test_owner_can_delete_document_and_files`.
 - **Fix commit URL:**
-  Local milestone: `backend/app/main.py`, `backend/app/models.py`, `backend/tests/test_security.py`
+  Commit: [`0645cc6`](https://github.com/promubu/trustvault/commit/0645cc6c66f29eb39641ea7505b878e19f1c54b0) (`backend/app/main.py`, `backend/app/models.py`, `backend/tests/test_security.py`)
 
 ---
 
@@ -49,7 +49,7 @@ The challenge requires at least five dated entries describing actual AI-assisted
 - **What I changed and how I verified it:**
   Enforced that `GET /documents/{document_id}/download` and `GET /documents/{document_id}` perform a real-time database query against `Grant` and `Document` for the authenticated `user.id`. Deleted grants take effect instantaneously upon database commit. Verified via `test_revocation_takes_effect_on_next_request`: Owner grants read access -> Viewer downloads (200 OK) -> Owner deletes grant (200 OK) -> Viewer attempts download immediately (404 Not Found).
 - **Fix commit URL:**
-  Local milestone: `backend/app/main.py`, `backend/tests/test_security.py`
+  Commit: [`0645cc6`](https://github.com/promubu/trustvault/commit/0645cc6c66f29eb39641ea7505b878e19f1c54b0) (`backend/app/main.py`, `backend/tests/test_security.py`)
 
 ---
 
@@ -63,7 +63,7 @@ The challenge requires at least five dated entries describing actual AI-assisted
 - **What I changed and how I verified it:**
   Added `serialize_dt` helper in `app/audit.py` that normalizes any naive datetime by attaching `timezone.utc` before formatting, ensuring consistent string representation across SQLite and PostgreSQL. Verified with `test_admin_privileges_and_audit_log_verification` and `test_audit_chain_detects_tampering`.
 - **Fix commit URL:**
-  Local milestone: `backend/app/audit.py`, `backend/app/main.py`, `backend/tests/test_security.py`
+  Commit: [`0645cc6`](https://github.com/promubu/trustvault/commit/0645cc6c66f29eb39641ea7505b878e19f1c54b0) (`backend/app/audit.py`, `backend/app/main.py`, `backend/tests/test_security.py`)
 
 ---
 
@@ -77,7 +77,7 @@ The challenge requires at least five dated entries describing actual AI-assisted
 - **What I changed and how I verified it:**
   Added `engine.dispose()` to the pytest fixture teardown before `os.remove`, freeing all connection handles cleanly. Expanded test coverage to 18 comprehensive security tests covering unauthenticated access, IDOR, search leakage, viewer restrictions, content spoofing, oversized uploads (413), and sequential audit chain consistency. All 18 tests passed in 17.25s.
 - **Fix commit URL:**
-  Local milestone: `backend/tests/test_security.py`
+  Commit: [`0645cc6`](https://github.com/promubu/trustvault/commit/0645cc6c66f29eb39641ea7505b878e19f1c54b0) (`backend/tests/test_security.py`)
 
 ---
 

@@ -19,7 +19,7 @@ services:
       sizeGB: 1
     envVars:
       - key: PYTHON_VERSION
-        value: 3.12.10
+        value: 3.12
       - key: DATABASE_URL
         fromDatabase:
           name: trustvault-db
@@ -31,7 +31,7 @@ services:
       - key: CORS_ORIGINS
         # Update with your exact Vercel deployment URL (comma-separated if multiple).
         # Wildcard "*" is strictly rejected in production mode (ENVIRONMENT=production).
-        value: http://localhost:5173,https://trustvault-frontend.vercel.app
+        value: http://localhost:5173,https://trustvault-brown.vercel.app,https://trustvault-frontend.vercel.app
       - key: ENVIRONMENT
         value: production
 

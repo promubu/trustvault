@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy import select, delete, or_
 from sqlalchemy.orm import Session
 from .config import settings
-from .db import Base, engine, get_db
+from .db import Base, engine, get_db, SessionLocal
 from .models import User, Document, Grant, AuditEvent
 from .schemas import (
     RegisterIn, LoginIn, GrantIn, GrantOut,
@@ -18,7 +18,7 @@ from .schemas import (
 from .security import hash_password, verify_password, make_token, token_user_id
 from .audit import write_audit, serialize_dt
 
-cors_list = [x.strip() for x in settings.cors_origins.split(",") if x.strip()]
+cors_list = [x.strip().rstrip("/") for x in settings.cors_origins.split(",") if x.strip()]
 has_wildcard = "*" in cors_list
 
 @asynccontextmanager
@@ -71,6 +71,10 @@ async def lifespan(app: FastAPI):
     # Ensure tables exist without dropping existing data; prevent credential leakage in error messages
     try:
         Base.metadata.create_all(bind=engine)
+        if getattr(settings, "auto_seed_demo", True):
+            from .seed import seed_demo_accounts
+            with SessionLocal() as db:
+                seed_demo_accounts(db)
     except Exception:
         safe_target = settings.safe_database_url
         raise RuntimeError(
@@ -83,6 +87,7 @@ app = FastAPI(title="TrustVault API", version="0.2.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_list if cors_list else ["http://localhost:5173"],
+    allow_origin_regex=r"^https:\/\/.*\.vercel\.app$",
     allow_credentials=False if has_wildcard else True,
     allow_methods=["*"],
     allow_headers=["*"],

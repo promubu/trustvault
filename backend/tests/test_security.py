@@ -530,3 +530,23 @@ def test_batch_document_permissions_with_multiple_grants():
     assert doc_ids[2] not in docs  # Ungranted doc not visible to viewer
 
 
+
+
+def test_cors_preflight_allows_vercel_production_origin():
+    # Test configured origin
+    res = client.options("/auth/login", headers={
+        "Origin": "https://trustvault-brown.vercel.app",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "content-type"
+    })
+    assert res.status_code == 200
+    assert res.headers.get("access-control-allow-origin") == "https://trustvault-brown.vercel.app"
+    assert res.headers.get("access-control-allow-credentials") == "true"
+
+    # Test arbitrary unauthorized origin
+    res_bad = client.options("/auth/login", headers={
+        "Origin": "https://malicious-attacker.com",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "content-type"
+    })
+    assert res_bad.status_code == 400

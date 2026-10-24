@@ -19,8 +19,9 @@ class Settings(BaseSettings):
     database_url: str = _default_database_url()
     secret_key: str = "development-only-change-me"
     upload_dir: str = _default_upload_dir()
-    cors_origins: str = "http://localhost:5173"
+    cors_origins: str = "http://localhost:5173,https://trustvault-brown.vercel.app,https://trustvault-frontend.vercel.app"
     environment: str = "development"
+    auto_seed_demo: bool = True
     model_config = SettingsConfigDict(env_file=(".env", "backend/.env"), extra="ignore")
 
     @property
